@@ -1,0 +1,113 @@
+---
+title: "PML_assignment"
+author: "Ketaki Kulkarni"
+date: "November 3, 2016"
+output: html_document
+---
+
+##Predicting how well fitness activity is done using accelerometer data
+The weight lifting exercise dataset for this assignment as well as the background understanding can be obtained by reading this paper:
+The data for this project come from this source: http://groupware.les.inf.puc-rio.br/har. 
+
+###Loading the required libraries
+```{r, warning=FALSE, message= FALSE}
+library(caret)
+library(corrplot)
+library(knitr)
+library(randomForest)
+library(doParallel) # parallel processing
+library(dplyr) # Used by caret
+library(pROC) # plot the ROC curve
+```
+
+###Getting the data 
+```{r, warning=FALSE,message=FALSE}
+##The training data for this project are available here:
+# # https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+# # The test data are available here:
+# # https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+#Data from the above sources was downloaded in the working directory
+training <- read.csv(file = "pml-training.csv",header = TRUE,stringsAsFactors = FALSE)
+testing <- read.csv(file = "pml-testing.csv",header = TRUE,stringsAsFactors = FALSE)
+```
+
+### Data preparation and Exploratory Analysis 
+```{r, warning=FALSE,message=FALSE}
+#Funtion to identify columns in a data frame with all NA values 
+all_na_cols <- function(x){
+  y <- sapply(x,function(xx)any(is.na(xx)))
+  names(y[y])
+}
+
+str(training)
+#Notice that a lot of columns are non-numeric, or have NAs in them. We will filter out these columns. Also the outcome variable 'classe' should be a factor
+training$classe <- as.factor(training$classe)
+outcome <- training$classe
+##Getting only accelerometer measurements. This is based on the whitepaper.
+predictor_variables <- grepl("belt|arm|dumbell", names(training))
+training = training[, predictor_variables]
+testing = testing[, predictor_variables]
+
+columns_to_omit <- all_na_cols(training)
+#columns_to_omit
+cols <- names(training) %in% columns_to_omit
+training_imputed <- training[!cols]
+testing_imputed <- testing[!cols]
+
+
+isnum <- sapply(training_imputed,is.numeric)
+training_imputed <- training_imputed[,isnum]
+#Let us look at the correlation matrix by using the corrplot function
+corrplot(cor(training_imputed))
+#Adding the outcome variable to the training dataset
+training_imputed$classe <- outcome
+#The training and testing dataframes must have the same columns.
+testing_imputed <- testing_imputed[,isnum]
+
+dim(training_imputed)
+#Now we are only left with 40 columns
+```
+
+###Model fitting and Prediction 
+```{r, warning=FALSE, message= FALSE}
+
+##Cross-validation - Dividing the training dataset 70%-30% in training and cross validation
+set.seed(35325)
+inTrain <- createDataPartition(y=training_imputed$classe, p=0.7, list=FALSE)
+training <- training_imputed[inTrain, ]
+validation <- training_imputed[-inTrain,]
+
+##Setting up parallel processing
+cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
+registerDoParallel(cluster)
+fitControl <- trainControl(method = "cv",
+                           number = 10,
+                           allowParallel = TRUE)
+
+##Training the model
+Sys.time()
+fit <- train(classe~., method="rf",data=training,trControl = fitControl)
+stopCluster(cluster)
+Sys.time()
+
+#Look at final model parameters
+fit$finalModel
+#Relative importance of the predictors 
+imp <- varImp(fit)
+imp
+#knitr::kable(imp, caption = "Importance of Predictors")
+
+#Cross validation 
+predictions <- predict(fit,newdata = validation)
+#To compute the out of sample error :
+model_accuracy <- postResample(predictions,validation$classe)
+```
+**The model accuracy is `r (model_accuracy[1]*100)`% . Therefore, out of sample error  is `r (1-model_accuracy[1])*100`%. So, it looks like we can proceed with applying this to the final testing data**
+
+#Applying to the actual testing data 
+```{r, warning=FALSE, message= FALSE}
+predictions_final <- predict(fit, newdata = testing_imputed)
+predictions_final # This is also the output required for the prediction quiz.
+```
+
